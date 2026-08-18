@@ -1,4 +1,5 @@
-import initSqlJs, { Database } from 'sql.js';
+import initSqlJsAsm from 'sql.js/dist/sql-asm.js';
+import initSqlJsWasm, { Database } from 'sql.js';
 import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
 import { SEED_SQL } from './seed';
 
@@ -10,9 +11,34 @@ class DatabaseEngine {
   private isInitialized = false;
   private isElectron = false;
   private initPromise: Promise<void> | null = null;
+  private sqlEngine: any = null;
 
   constructor() {
     this.isElectron = typeof window !== 'undefined' && !!(window as any).electronAPI;
+  }
+
+  private async getSqlEngine(): Promise<any> {
+    if (this.sqlEngine) return this.sqlEngine;
+
+    // First try pure-JS sql-asm which requires 0 network requests and 0 wasm files
+    try {
+      this.sqlEngine = await initSqlJsAsm({});
+      return this.sqlEngine;
+    } catch (asmErr) {
+      console.warn('sql-asm initialization fallback to wasm...', asmErr);
+      try {
+        this.sqlEngine = await initSqlJsWasm({
+          locateFile: () => sqlWasmUrl
+        });
+        return this.sqlEngine;
+      } catch (wasmErr) {
+        console.warn('wasm locateFile failed, trying public path...', wasmErr);
+        this.sqlEngine = await initSqlJsWasm({
+          locateFile: (file) => `./${file}`
+        });
+        return this.sqlEngine;
+      }
+    }
   }
 
   public async init(): Promise<void> {
@@ -27,32 +53,7 @@ class DatabaseEngine {
           return;
         }
 
-        // Initialize sql.js WebAssembly with local Vite-bundled asset, public fallback, and CDN fallbacks
-        let SQL: any;
-        try {
-          SQL = await initSqlJs({
-            locateFile: () => sqlWasmUrl
-          });
-        } catch (localErr) {
-          console.warn('Local wasm via Vite asset URL failed, trying public path...', localErr);
-          try {
-            SQL = await initSqlJs({
-              locateFile: (file) => `./${file}`
-            });
-          } catch (pubErr) {
-            console.warn('Public path failed, trying cdnjs fallback...', pubErr);
-            try {
-              SQL = await initSqlJs({
-                locateFile: (file) => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.12.0/${file}`
-              });
-            } catch (cdnErr) {
-              console.warn('cdnjs failed, trying jsdelivr fallback...', cdnErr);
-              SQL = await initSqlJs({
-                locateFile: (file) => `https://cdn.jsdelivr.net/npm/sql.js@1.12.0/dist/${file}`
-              });
-            }
-          }
-        }
+        const SQL = await this.getSqlEngine();
 
         // Check if existing database buffer in localStorage
         const savedData = localStorage.getItem(LOCAL_STORAGE_DB_KEY);
@@ -492,9 +493,7 @@ class DatabaseEngine {
       const res = await (window as any).electronAPI.dbImportBackup(Array.from(data));
       return res.success;
     }
-    const SQL = await initSqlJs({
-      locateFile: (file) => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.12.0/${file}`
-    });
+    const SQL = await this.getSqlEngine();
     this.db = new SQL.Database(data);
     this.persist();
     return true;
@@ -506,9 +505,7 @@ class DatabaseEngine {
       await this.execute("SELECT 1;");
     }
     localStorage.removeItem(LOCAL_STORAGE_DB_KEY);
-    const SQL = await initSqlJs({
-      locateFile: (file) => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.12.0/${file}`
-    });
+    const SQL = await this.getSqlEngine();
     this.db = new SQL.Database();
     await this.bootstrapSchemaAndSeed();
     this.persist();
