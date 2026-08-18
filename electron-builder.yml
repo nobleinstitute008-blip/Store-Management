@@ -1,0 +1,26 @@
+appId: com.clothstore.desktop.pro
+productName: ClothStore Pro
+directories:
+  output: release
+  buildResources: build
+files:
+  - "dist/**/*"
+  - "dist-electron/**/*"
+  - "package.json"
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+        - ia32
+    - target: portable
+      arch:
+        - x64
+  artifactName: "${productName}-Setup-${version}.${ext}"
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: "ClothStore Pro"
+  runAfterFinish: true
