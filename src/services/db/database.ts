@@ -1,4 +1,5 @@
 import initSqlJs, { Database } from 'sql.js';
+import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
 import { SEED_SQL } from './seed';
 
 // Key for browser localStorage / IndexedDB backup persistence
@@ -26,10 +27,32 @@ class DatabaseEngine {
           return;
         }
 
-        // Initialize sql.js WebAssembly
-        const SQL = await initSqlJs({
-          locateFile: (file) => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.12.0/${file}`
-        });
+        // Initialize sql.js WebAssembly with local Vite-bundled asset, public fallback, and CDN fallbacks
+        let SQL: any;
+        try {
+          SQL = await initSqlJs({
+            locateFile: () => sqlWasmUrl
+          });
+        } catch (localErr) {
+          console.warn('Local wasm via Vite asset URL failed, trying public path...', localErr);
+          try {
+            SQL = await initSqlJs({
+              locateFile: (file) => `./${file}`
+            });
+          } catch (pubErr) {
+            console.warn('Public path failed, trying cdnjs fallback...', pubErr);
+            try {
+              SQL = await initSqlJs({
+                locateFile: (file) => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.12.0/${file}`
+              });
+            } catch (cdnErr) {
+              console.warn('cdnjs failed, trying jsdelivr fallback...', cdnErr);
+              SQL = await initSqlJs({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/sql.js@1.12.0/dist/${file}`
+              });
+            }
+          }
+        }
 
         // Check if existing database buffer in localStorage
         const savedData = localStorage.getItem(LOCAL_STORAGE_DB_KEY);

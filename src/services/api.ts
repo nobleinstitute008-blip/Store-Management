@@ -1554,5 +1554,131 @@ export const ApiService = {
       netProfit,
       expenseBreakdown
     };
+  },
+
+  async getSalesReport(startDate: string, endDate: string) {
+    const orders = await db.query<any>(
+      `
+      SELECT id, invoice_no, grand_total, subtotal, discount, tax, paid_amount, sale_date
+      FROM sales
+      WHERE sale_date >= ? AND sale_date <= ?
+      ORDER BY sale_date DESC
+    `,
+      [startDate, endDate]
+    );
+
+    const totalOrders = orders.length;
+    const totalRevenue = orders.reduce((sum, o) => sum + (o.grand_total || 0), 0);
+
+    const cogsRow = await db.queryOne<{ cogs: number }>(
+      `
+      SELECT COALESCE(SUM(si.quantity * pv.purchase_price), 0) as cogs
+      FROM sale_items si
+      JOIN product_variations pv ON si.variation_id = pv.id
+      JOIN sales s ON si.sale_id = s.id
+      WHERE s.sale_date >= ? AND s.sale_date <= ?
+    `,
+      [startDate, endDate]
+    );
+    const cogs = cogsRow?.cogs || 0;
+    const grossProfit = totalRevenue - cogs;
+
+    const categoryBreakdown = await db.query<any>(
+      `
+      SELECT c.name as category_name, COALESCE(SUM(si.total_price), 0) as total_revenue, COALESCE(SUM(si.quantity), 0) as total_meters
+      FROM categories c
+      JOIN products p ON c.id = p.category_id
+      JOIN sale_items si ON p.id = si.product_id
+      JOIN sales s ON si.sale_id = s.id
+      WHERE s.sale_date >= ? AND s.sale_date <= ?
+      GROUP BY c.id
+      ORDER BY total_revenue DESC
+    `,
+      [startDate, endDate]
+    );
+
+    return {
+      totalOrders,
+      totalRevenue,
+      grossProfit,
+      categoryBreakdown
+    };
+  },
+
+  async getStockValuationReport() {
+    const categories = await db.query<any>(`
+      SELECT 
+        c.name as category_name,
+        COUNT(DISTINCT p.id) as product_count,
+        COALESCE(SUM(pv.current_stock), 0) as total_qty,
+        COALESCE(SUM(pv.current_stock * pv.purchase_price), 0) as cost_val,
+        COALESCE(SUM(pv.current_stock * pv.sale_price), 0) as retail_val
+      FROM categories c
+      LEFT JOIN products p ON c.id = p.category_id
+      LEFT JOIN product_variations pv ON p.id = pv.product_id
+      GROUP BY c.id
+      ORDER BY total_qty DESC
+    `);
+
+    const totalQuantity = categories.reduce((sum: number, c: any) => sum + (c.total_qty || 0), 0);
+    const totalCostValue = categories.reduce((sum: number, c: any) => sum + (c.cost_val || 0), 0);
+    const totalRetailValue = categories.reduce((sum: number, c: any) => sum + (c.retail_val || 0), 0);
+
+    return {
+      totalQuantity,
+      totalCostValue,
+      totalRetailValue,
+      byCategory: categories
+    };
+  },
+
+  async getSaleById(id: number): Promise<Sale | null> {
+    const sale = await db.queryOne<Sale>(`
+      SELECT s.*, c.name as customer_name, c.phone as customer_phone, u.full_name as creator_name
+      FROM sales s
+      LEFT JOIN customers c ON s.customer_id = c.id
+      LEFT JOIN users u ON s.created_by = u.id
+      WHERE s.id = ?
+    `, [id]);
+
+    if (!sale) return null;
+
+    sale.items = await db.query<any>(`
+      SELECT 
+        si.*,
+        p.name as product_name,
+        p.fabric_type,
+        pv.sku as variation_sku,
+        pv.color,
+        u.symbol as unit_symbol
+      FROM sale_items si
+      JOIN products p ON si.product_id = p.id
+      JOIN product_variations pv ON si.variation_id = pv.id
+      LEFT JOIN units u ON p.default_unit_id = u.id
+      WHERE si.sale_id = ?
+    `, [id]);
+
+    return sale;
+  },
+
+  async changePassword(userId: number, newPassword: string, adminUser?: User): Promise<void> {
+    const hash = await import('./auth').then((m) => m.hashPassword(newPassword));
+    await db.execute('UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [hash, userId]);
+    if (adminUser) {
+      await db.execute(
+        'INSERT INTO audit_logs (user_id, username, action, entity, reference_id, details) VALUES (?, ?, ?, ?, ?, ?)',
+        [adminUser.id, adminUser.username, 'PASSWORD_CHANGED', 'USERS', `USR-${userId}`, `Password updated for user ID ${userId}`]
+      );
+    }
+  },
+
+  async deleteUser(userId: number, adminUser?: User): Promise<void> {
+    await db.execute('UPDATE users SET status = "inactive", updated_at = CURRENT_TIMESTAMP WHERE id = ?', [userId]);
+    if (adminUser) {
+      await db.execute(
+        'INSERT INTO audit_logs (user_id, username, action, entity, reference_id, details) VALUES (?, ?, ?, ?, ?, ?)',
+        [adminUser.id, adminUser.username, 'USER_DEACTIVATED', 'USERS', `USR-${userId}`, `Deactivated user ID ${userId}`]
+      );
+    }
   }
 };

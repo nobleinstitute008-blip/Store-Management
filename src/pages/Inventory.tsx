@@ -238,11 +238,14 @@ export const Inventory: React.FC<InventoryProps> = ({ currentUser, settings }) =
     }
 
     try {
+      const qty = adjustType === 'subtract' || adjustType === 'damage' ? -adjustQty : adjustQty;
+      const movType = adjustType === 'damage' ? 'damage' : 'adjustment';
       await ApiService.adjustStock(
         adjustingVariation.id,
-        adjustType,
-        adjustQty,
+        qty,
+        movType,
         adjustReason || 'Manual Inventory Audit Correction',
+        `Adjusted: ${adjustType}`,
         currentUser || undefined
       );
 
